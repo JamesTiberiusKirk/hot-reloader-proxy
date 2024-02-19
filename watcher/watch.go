@@ -9,7 +9,31 @@ import (
 	"github.com/radovskyb/watcher"
 )
 
-func StartTemplateWatcher(log logger.Logger, templatesChanged chan<- string, templateDir string, ignore []string, include []string) {
+type Config struct {
+	TemplateDir   string
+	Ignore        []string
+	Include       []string
+	IgnoreSuffix  []string
+	IncludeSuffix []string
+	RegexFilter   string
+	EventWindow   int
+	PolingTime    int
+}
+
+func (w *Config) overrideZeros() {
+	if w.PolingTime == 0 {
+		w.PolingTime = 10
+	}
+
+	if w.EventWindow == 0 {
+		w.EventWindow = 140
+	}
+
+	w.Ignore = append(w.Ignore, "~")
+	w.IgnoreSuffix = append(w.IgnoreSuffix, "_templ.go", "_templ.txt")
+}
+
+func StartTemplateWatcher(log logger.Logger, templatesChanged chan<- string, watcherConfig Config) {
 	w := watcher.New()
 
 	// SetMaxEvents to 1 to allow at most 1 event's to be received
@@ -26,8 +50,23 @@ func StartTemplateWatcher(log logger.Logger, templatesChanged chan<- string, tem
 	// r := regexp.MustCompile(".*.(css|go)")
 	// w.AddFilterHook(watcher.RegexFilterHook(r, false))
 
-	w.AddFilterHook(nameContainsIgnoreFilterHook(true, ignore...))
-	w.AddFilterHook(nameContainsFilterHook(true, include...))
+	watcherConfig.overrideZeros()
+
+	w.SetMaxEvents(1)
+	if len(watcherConfig.Ignore) > 0 {
+		w.AddFilterHook(nameContainsIgnoreFilterHook(true, watcherConfig.Ignore...))
+	}
+	if len(watcherConfig.Include) > 0 {
+		w.AddFilterHook(nameContainsFilterHook(true, watcherConfig.Include...))
+	}
+
+	if len(watcherConfig.IncludeSuffix) > 0 {
+		w.AddFilterHook(suffixFilterHook(false, watcherConfig.IncludeSuffix...))
+	}
+
+	if len(watcherConfig.IgnoreSuffix) > 0 {
+		w.AddFilterHook(suffixIgnoreFilterHook(false, watcherConfig.IgnoreSuffix...))
+	}
 
 	previousT := time.Now()
 
@@ -35,10 +74,10 @@ func StartTemplateWatcher(log logger.Logger, templatesChanged chan<- string, tem
 		for {
 			select {
 			case event := <-w.Event:
-
 				// NOTE: dont sendevents that come together within a certain time
-				modTimeBefore := event.ModTime().Add(-50 * time.Millisecond)
-				modTimeAfter := event.ModTime().Add(+50 * time.Millisecond)
+				eventWindowHalf := time.Duration(watcherConfig.EventWindow / 2)
+				modTimeBefore := event.ModTime().Add(-eventWindowHalf * time.Millisecond)
+				modTimeAfter := event.ModTime().Add(+eventWindowHalf * time.Millisecond)
 
 				if previousT.After(modTimeBefore) && previousT.Before(modTimeAfter) {
 					continue
@@ -48,7 +87,7 @@ func StartTemplateWatcher(log logger.Logger, templatesChanged chan<- string, tem
 
 				templatesChanged <- event.Path
 			case err := <-w.Error:
-				log.Info("FS error: ", err.Error()) // Print the event's info.
+				log.Error("FS error: %s", err.Error()) // Print the event's info.
 			case <-w.Closed:
 				return
 			}
@@ -56,26 +95,13 @@ func StartTemplateWatcher(log logger.Logger, templatesChanged chan<- string, tem
 	}()
 
 	// Watch test_folder recursively for changes.
-	if err := w.AddRecursive(templateDir); err != nil {
-		log.Info("Add recusive error: ", err) // Print the event's info.
+	if err := w.AddRecursive(watcherConfig.TemplateDir); err != nil {
+		log.Error("Add recusive error: %s", err.Error()) // Print the event's info.
 	}
 
-	// Print a list of all of the files and folders currently
-	// being watched and their paths.
-	// for path := range w.WatchedFiles() {
-	// 	slog.Info("[HOT_RELOAD] watching", "path", path)
-	// }
-
-	// Trigger 2 events after watcher started.
-	// go func() {
-	// 	w.Wait()
-	// 	w.TriggerEvent(watcher.Create, nil)
-	// 	w.TriggerEvent(watcher.Remove, nil)
-	// }()
-
 	// Start the watching process - it'll check for changes every 100ms.
-	if err := w.Start(time.Millisecond * 100); err != nil {
-		log.Info("Error starting watcher: ", err)
+	if err := w.Start(time.Millisecond * time.Duration(watcherConfig.PolingTime)); err != nil {
+		log.Error("Error starting watcher: %s", err.Error())
 		panic(err)
 	}
 
@@ -120,7 +146,49 @@ func nameContainsIgnoreFilterHook(useFullPath bool, contains ...string) watcher.
 			}
 
 		}
+		// Dont ignore
+		return nil
+	}
+}
+
+// suffixFilterHook - Extending watcher functionality with using strings.Contains
+// This will add on match
+func suffixFilterHook(useFullPath bool, suffixes ...string) watcher.FilterFileHookFunc {
+	return func(info os.FileInfo, fullPath string) error {
+		str := info.Name()
+
+		if useFullPath {
+			str = fullPath
+		}
+
+		for _, s := range suffixes {
+			if strings.HasSuffix(str, s) {
+				return nil
+			}
+		}
+
 		// No match.
+		return watcher.ErrSkip
+	}
+}
+
+// suffixIgnoreFilterHook - Extending watcher functionality with using strings.Contains
+// This will ignore on match
+func suffixIgnoreFilterHook(useFullPath bool, suffixes ...string) watcher.FilterFileHookFunc {
+	return func(info os.FileInfo, fullPath string) error {
+		str := info.Name()
+
+		if useFullPath {
+			str = fullPath
+		}
+
+		for _, s := range suffixes {
+			if strings.HasSuffix(str, s) {
+				return watcher.ErrSkip
+			}
+		}
+
+		// Dont ignore
 		return nil
 	}
 }
