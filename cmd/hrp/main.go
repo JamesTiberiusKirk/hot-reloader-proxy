@@ -50,7 +50,7 @@ func main() {
 
 	serverCheck:
 		for {
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(50 * time.Millisecond)
 			_, err := http.Get("http://" + devServerHost + "/ready")
 			if err != nil {
 				continue

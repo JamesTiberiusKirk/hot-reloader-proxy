@@ -29,8 +29,8 @@ func (w *Config) overrideZeros() {
 		w.EventWindow = 140
 	}
 
-	w.Ignore = append(w.Ignore, "~")
-	w.IgnoreSuffix = append(w.IgnoreSuffix, "_templ.go", "_templ.txt")
+	// w.Ignore = append(w.Ignore, "~")
+	// w.IgnoreSuffix = append(w.IgnoreSuffix, "_templ.go", "_templ.txt")
 }
 
 func StartTemplateWatcher(log logger.Logger, templatesChanged chan<- string, watcherConfig Config) {
@@ -53,9 +53,11 @@ func StartTemplateWatcher(log logger.Logger, templatesChanged chan<- string, wat
 	watcherConfig.overrideZeros()
 
 	w.SetMaxEvents(1)
+
 	if len(watcherConfig.Ignore) > 0 {
 		w.AddFilterHook(nameContainsIgnoreFilterHook(true, watcherConfig.Ignore...))
 	}
+
 	if len(watcherConfig.Include) > 0 {
 		w.AddFilterHook(nameContainsFilterHook(true, watcherConfig.Include...))
 	}
